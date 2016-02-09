@@ -23,45 +23,46 @@ class Contact:
 
     id = property(_get_id)
 
-    def _set_name(self, name):
-        self._name = name
-
     def _get_name(self):
         return self._name
 
-    name = property(_get_name, _set_name)
+    def _set_name(self, name):
+        self._name = name
 
-    def _set_lastname(self, lastname):
-        self._lastname = lastname
+    name = property(_get_name, _set_name)
 
     def _get_lastname(self):
         return self._lastname
 
-    lastname = property(_get_lastname, _set_lastname)
+    def _set_lastname(self, lastname):
+        self._lastname = lastname
 
-    def _set_phone(self, phone):
-        self._phone = phone
+    lastname = property(_get_lastname, _set_lastname)
 
     def _get_phone(self):
         return self._phone
 
+    def _set_phone(self, phone):
+        self._phone = phone
+
     phone = property(_get_phone, _set_phone)
 
-    def _set_mail(self, mail):
-        if re.search("^.*@.*", mail) is None:
+    @property
+    def mail(self):
+        return self._mail
+
+    @mail.setter
+    def mail(self, mail):
+        # E-Mail format validation
+        if mail and re.search(".*@.*", mail) is None:
             raise AttributeError("Malformed e-mail.")
         self._mail = mail
 
-    def _get_mail(self):
-        return self._mail
-
-    mail = property(_get_mail, _set_mail)
+    def _get_address(self):
+        return self._address
 
     def _set_address(self, address):
         self._address = address
-
-    def _get_address(self):
-        return self._address
 
     address = property(_get_address, _set_address)
 

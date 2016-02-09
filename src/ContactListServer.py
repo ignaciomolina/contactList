@@ -11,7 +11,6 @@ from Contact import Contact
 from Group import Group
 from User import User
 
-
 __author__ = 'Ignacio Molina Cuquerella'
 __email__ = 'neldan@gmail.com'
 
@@ -25,6 +24,7 @@ def users_list():
     from_date = 0
     to_date = int(round(time.time() * 1000))  # current time in millis
 
+    # if client has set a restricted time window
     if request.args.get('from'):
         date = request.args.get('from')
         from_date = datetime.strptime(str(date), '%d/%m/%Y').timestamp() * 1000
@@ -32,14 +32,14 @@ def users_list():
         date = request.args.get('to')
         to_date = datetime.strptime(str(date), '%d/%m/%Y').timestamp() * 1000
 
-    users_set = set()
+    # Getting users list from Redis
+    users_set = {jsonpickle.decode(r_server.get('user:%s' %
+                                    (user_id.decode('utf-8'))).decode('utf-8'))
+        for user_id in r_server.zrangebyscore('user:set', from_date, to_date)}
 
-    for userId in r_server.zrangebyscore('user:set', from_date, to_date):
-        user = jsonpickle.decode(r_server.get('user:%s' %
-                                     (userId.decode('utf-8'))).decode('utf-8'))
-        users_set.add(user)
-
-    return jsonpickle.encode(users_set, unpicklable=False)
+    return make_response(
+        jsonpickle.encode(users_set, unpicklable=False).replace('_', ''),
+        200, {'Content-Type': 'application/json'})
 
 
 @app.route('/', methods=['POST'])
@@ -55,10 +55,13 @@ def add_user():
 
     millis = int(round(time.time() * 1000))
 
+    # If user does not exist, it's created and return new URI
     if not r_server.zscore('user:set', user.username):
         r_server.zadd('user:set', user.username, millis)
         r_server.set('user:%s' % user.username, jsonpickle.encode(user))
-        return 'localhost:5000/%s' % user.username
+
+        return make_response("User created.", 201,
+                             {'location': 'localhost:5000/%s' % user.username})
 
     return make_response("That user already exist!", 400)
 
@@ -71,7 +74,9 @@ def get_user(user_id):
 
     user = jsonpickle.decode(r_server.get('user:%s' % user_id).decode('utf-8'))
 
-    return jsonpickle.encode(user, unpicklable=False)
+    return make_response(
+        jsonpickle.encode(user, unpicklable=False).replace('_', ''),
+        200, {'Content-Type': 'application/json'})
 
 
 @app.route('/<user_id>/', methods=['PUT'])
@@ -96,13 +101,11 @@ def change_user(user_id):
 @app.route('/<user_id>/', methods=['DELETE'])
 def remove_user(user_id):
 
+    # Remove user and all its relative content from Redis
     r_server.zrem('user:set', user_id)
     r_server.delete('user:%s' % user_id)
-    for key in r_server.keys('group:%s:*' % user_id):
-        r_server.delete(key)
-
-    for key in r_server.keys('contact:%s:*' % user_id):
-        r_server.delete(key)
+    [r_server.delete(key) for key in r_server.keys('group:%s:*' % user_id)]
+    [r_server.delete(key) for key in r_server.keys('contact:%s:*' % user_id)]
 
     return make_response('', 200)
 
@@ -113,6 +116,7 @@ def groups_list(user_id):
     from_date = 0
     to_date = int(round(time.time() * 1000))  # current time in millis
 
+    # If client has set a restricted time window
     if request.args.get('from'):
         date = request.args.get('from')
         from_date = datetime.strptime(str(date), '%d/%m/%Y').timestamp() * 1000
@@ -120,19 +124,17 @@ def groups_list(user_id):
         date = request.args.get('to')
         to_date = datetime.strptime(str(date), '%d/%m/%Y').timestamp() * 1000
 
-    groups_set = set()
-
     if not r_server.zscore('user:set', user_id):
         return make_response('That user does not exist', 404)
 
-    for group_id in r_server.zrangebyscore('group:%s:set' % user_id, from_date,
-                                           to_date):
-        group = jsonpickle.decode(
-            r_server.get('group:%s:%s' %
-                         (user_id, group_id.decode('utf-8'))).decode('utf-8'))
-        groups_set.add(group)
+    groups_set = {jsonpickle.decode(r_server.get('group:%s:%s' %
+                     (user_id, group_id.decode('utf-8'))).decode('utf-8'))
+                  for group_id in r_server.zrangebyscore('group:%s:set' %
+                                                user_id, from_date, to_date)}
 
-    return jsonpickle.encode(groups_set, unpicklable=False)
+    return make_response(
+        jsonpickle.encode(groups_set, unpicklable=False).replace('_', ''),
+        200, {'Content-Type': 'application/json'})
 
 
 @app.route('/<user_id>/groups/', methods=['POST'])
@@ -155,7 +157,10 @@ def add_group(user_id):
         r_server.zadd('group:%s:set' % user_id, group.name, millis)
         r_server.set('group:%s:%s' % (user_id, group.name),
                      jsonpickle.encode(group))
-        return 'localhost:5000/%s/groups/%s' % (user_id, group.name)
+
+        return make_response("Group created.", 201,
+                             {'location': 'localhost:5000/%s/groups/%s' %
+                                          (user_id, group.name)})
 
     return make_response("That group already exist!", 400)
 
@@ -172,7 +177,9 @@ def get_group(user_id, group_id):
     group = jsonpickle.decode(r_server.get('group:%s:%s' % (user_id,
                                                     group_id)).decode('utf-8'))
 
-    return jsonpickle.encode(group, unpicklable=False)
+    return make_response(
+        jsonpickle.encode(group, unpicklable=False).replace('_', ''), 200,
+        {'Content-Type': 'application/json'})
 
 
 @app.route('/<user_id>/groups/<group_id>/', methods=['PUT'])
@@ -204,8 +211,8 @@ def remove_group(user_id, group_id):
     r_server.zrem('group:%s:set' % user_id, group_id)
     r_server.delete('group:%s:%s' % (user_id, group_id))
 
-    for key in r_server.keys('contact:%s:%s:*' % (user_id, group_id)):
-        r_server.delete(key)
+    [r_server.delete(key) for key in r_server.keys('contact:%s:%s:*' %
+                                                   (user_id, group_id))]
 
     return make_response('', 200)
 
@@ -223,23 +230,21 @@ def contacts_list(user_id, group_id):
         date = request.args.get('to')
         to_date = datetime.strptime(str(date), '%d/%m/%Y').timestamp() * 1000
 
-    contact_set = set()
-
     if not r_server.zscore('user:set', user_id):
         return make_response('That user does not exist', 404)
 
     if not r_server.zscore('group:%s:set' % user_id, group_id):
         return make_response('That group does not exist', 404)
 
-    for contact_id in r_server.zrangebyscore('contact:%s:%s:set' % (user_id,
-                                                                    group_id),
-                                             from_date, to_date):
-        contact = jsonpickle.decode(
-            r_server.get('contact:%s:%s:%s' % (user_id, group_id,
-                                   contact_id.decode('utf-8'))).decode('utf-8'))
-        contact_set.add(contact)
+    contact_set = {jsonpickle.decode(r_server.get('contact:%s:%s:%s' %
+                                                  (user_id, group_id,
+                                contact_id.decode('utf-8'))).decode('utf-8'))
+                   for contact_id in r_server.zrangebyscore('contact:%s:%s:set'
+                                    % (user_id, group_id), from_date, to_date)}
 
-    return jsonpickle.encode(contact_set, unpicklable=False)
+    return make_response(
+        jsonpickle.encode(contact_set, unpicklable=False).replace('_', ''),
+        200, {'Content-Type': 'application/json'})
 
 
 @app.route('/<user_id>/groups/<group_id>/contacts/', methods=['POST'])
@@ -253,13 +258,16 @@ def add_contact(user_id, group_id):
 
     data = request.get_json(silent=False)
 
+    # Contact has validation for mail field
     try:
-        contact_id = r_server.incr('contact:%s:%s:lastID')
+        # Due to all contact information is optional, a generated ID is used as
+        # storing key
+        contact_id = r_server.incr('contact:%s:%s:lastID' % (user_id, group_id))
 
         contact = Contact(contact_id)
         contact.from_json(data)
     except AttributeError as e:
-        r_server.decr('contact:%s:%s:lastID')
+        r_server.decr('contact:%s:%s:lastID' % (user_id, group_id))
         return make_response(str(e), 400)
 
     millis = int(round(time.time() * 1000))
@@ -270,10 +278,12 @@ def add_contact(user_id, group_id):
                       contact_id, millis)
         r_server.set('contact:%s:%s:%s' % (user_id, group_id, contact_id),
                      jsonpickle.encode(contact))
-        return 'localhost:5000/%s/groups/%s/contacts/%s' % (user_id, group_id,
-                                                            contact_id)
 
-    return make_response("That group already exist!", 400)
+        return make_response("Contact created.", 201, {'location':
+                                'localhost:5000/%s/groups/%s/contacts/%s' %
+                                (user_id, group_id, contact_id)})
+
+    return make_response("That contact already exist!", 400)
 
 
 @app.route('/<user_id>/groups/<group_id>/contacts/<contact_id>', methods=['GET'])
@@ -294,7 +304,9 @@ def get_contact(user_id, group_id, contact_id):
                                                                    contact_id))
                                 .decode('utf-8'))
 
-    return jsonpickle.encode(contact, unpicklable=False)
+    return make_response(
+        jsonpickle.encode(contact, unpicklable=False).replace('_', ''), 200,
+        {'Content-Type': 'application/json'})
 
 
 @app.route('/<user_id>/groups/<group_id>/contacts/<contact_id>', methods=['PUT'])
